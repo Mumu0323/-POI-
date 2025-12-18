@@ -1,24 +1,17 @@
-﻿# 【前置步骤】先运行以下命令安装所有依赖包（仅需执行一次）：
-install.packages(c("shiny", "leaflet", "leaflet.extras", "sf", "httr", "jsonlite", 
-                   "DT", "shinycssloaders", "shinyWidgets", "plotly", "bslib", 
-                   "dplyr", "stringr", "fs", "purrr"), 
-                 repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+if (!requireNamespace("pak", quietly = TRUE)) install.packages("pak", repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
 
-library(shiny)
-library(leaflet)
-library(leaflet.extras)
-library(sf)
-library(httr)
-library(jsonlite)
-library(DT)
-library(shinycssloaders)
-library(shinyWidgets)
-library(plotly)
-library(bslib)
-library(dplyr)
-library(stringr)
-library(fs)
-library(purrr)
+required_packages <- c("shiny", "leaflet", "leaflet.extras", "sf", "httr", "jsonlite",
+                       "DT", "shinycssloaders", "shinyWidgets", "plotly", "bslib",
+                       "dplyr", "stringr", "fs", "purrr")
+
+missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+
+if (length(missing_packages) > 0) {
+  pak::pkg_install(missing_packages, ask = FALSE)
+  sapply(missing_packages, library, character.only = TRUE)
+} else {
+  invisible(sapply(required_packages, library, character.only = TRUE))
+}
 
 ui <- fluidPage(
   theme = bs_theme(version = 5, bootswatch = "flatly"),
@@ -670,7 +663,7 @@ server <- function(input, output, session) {
                 return new L.DivIcon({
                   html: '<div style=\"background-color: rgba(255, 107, 107, 0.6); border-radius: 50%; color: white; font-weight: bold;\">' + cluster.getChildCount() + '</div>',
                   className = 'poi-marker-cluster',
-                  iconSize: new L.Point(40, 40)
+                  iconSize = new L.Point(40, 40)
                 });
               }
             ")
@@ -797,7 +790,7 @@ server <- function(input, output, session) {
                 return new L.DivIcon({
                   html: '<div style=\"background-color: rgba(255, 107, 107, 0.6); border-radius: 50%; color: white; font-weight: bold;\">' + cluster.getChildCount() + '</div>',
                   className = 'poi-marker-cluster',
-                  iconSize: new L.Point(40, 40)
+                  iconSize = new L.Point(40, 40)
                 });
               }
             ")
@@ -1072,7 +1065,7 @@ server <- function(input, output, session) {
     }
     
     safe_filename <- gsub("[^a-zA-Z0-9_\\-]", "_", filename)
-    safe_filename <- substr(safe_filename, 1, 8) # 限制Shapefile主文件名长度
+    safe_filename <- substr(safe_filename, 1, 8)
     
     reactive_data$export_status <- "processing"
     
@@ -1110,7 +1103,6 @@ server <- function(input, output, session) {
       if (format == "csv") {
         file_path <- paste0(base_path, ".csv")
         
-        # 修复CSV编码问题 - 使用UTF-8-BOM编码，确保Excel正确显示中文
         con <- file(file_path, "w", encoding = "UTF-8")
         writeLines("\uFEFF", con, useBytes = TRUE)
         write.csv(export_data, con, row.names = FALSE, na = "", fileEncoding = "UTF-8")
@@ -1168,15 +1160,4 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
-
-
-高德地图 POI 搜索与可视化分析系统
-
-
-
-
-
-
-
-
 
