@@ -1,0 +1,1182 @@
+﻿# 【前置步骤】先运行以下命令安装所有依赖包（仅需执行一次）：
+install.packages(c("shiny", "leaflet", "leaflet.extras", "sf", "httr", "jsonlite", 
+                   "DT", "shinycssloaders", "shinyWidgets", "plotly", "bslib", 
+                   "dplyr", "stringr", "fs", "purrr"), 
+                 repos = "https://mirrors.tuna.tsinghua.edu.cn/CRAN/")
+
+library(shiny)
+library(leaflet)
+library(leaflet.extras)
+library(sf)
+library(httr)
+library(jsonlite)
+library(DT)
+library(shinycssloaders)
+library(shinyWidgets)
+library(plotly)
+library(bslib)
+library(dplyr)
+library(stringr)
+library(fs)
+library(purrr)
+
+ui <- fluidPage(
+  theme = bs_theme(version = 5, bootswatch = "flatly"),
+  tags$head(
+    tags$link(rel = "stylesheet", type = "text/css", href = "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"),
+    tags$style(HTML("
+      .main-header { 
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 8px;
+      }
+      .stats-card {
+        background: white;
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 15px;
+      }
+      .custom-btn {
+        width: 100%;
+        margin: 5px 0;
+      }
+      .poi-marker-cluster {
+        background-color: rgba(255, 107, 107, 0.6);
+        border-radius: 50%;
+        text-align: center;
+        color: white;
+        font-weight: bold;
+      }
+      .poi-marker-cluster div {
+        background-color: rgba(255, 107, 107, 0.8);
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        line-height: 30px;
+        margin: 5px;
+      }
+      .map-container {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        position: relative;
+      }
+      .coordinate-info {
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 5px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        z-index: 1000;
+      }
+      .loading-message {
+        text-align: center;
+        padding: 20px;
+        color: #666;
+      }
+      .api-key-info {
+        font-size: 11px;
+        color: #6c757d;
+        margin-top: 5px;
+      }
+      .api-key-warning {
+        font-size: 11px;
+        color: #ff6b6b;
+        margin-top: 5px;
+      }
+      .export-progress {
+        margin-top: 10px;
+        padding: 10px;
+        background: #f8f9fa;
+        border-radius: 5px;
+      }
+      .leaflet-tooltip {
+        background: rgba(255, 255, 255, 0.95);
+        color: #333;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: bold;
+        border: 2px solid #667eea;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        white-space: nowrap;
+        max-width: 300px;
+        z-index: 1001;
+      }
+      .poi-label {
+        background: rgba(255, 255, 255, 0.95);
+        color: #333;
+        padding: 6px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        border: 1px solid #667eea;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        white-space: nowrap;
+        max-width: 200px;
+        text-align: center;
+        font-family: Arial, sans-serif;
+      }
+    "))
+  ),
+  
+  div(class = "main-header",
+      h1("🗺️ 智能POI可视化搜索平台", style = "margin:0; display:inline;"),
+      span("基于高德地图API & 多源底图服务", style = "float:right; margin-top:10px;")
+  ),
+  
+  sidebarLayout(
+    sidebarPanel(
+      width = 3,
+      style = "background: #f8f9fa; border-radius: 8px; padding: 15px;",
+      
+      h4("🔍 搜索条件", style = "color: #2c3e50;"),
+      
+      textInput("amap_api_key", "🔑 高德API密钥", value = "", placeholder = "请输入您的高德API密钥"),
+      uiOutput("api_key_warning"),
+      div(class = "api-key-info", "使用您自己的API密钥可提高搜索稳定性和准确性"),
+      
+      textInput("address_input", "📍 输入精确地址", placeholder = "例如：北京市海淀区上地十街10号"),
+      
+      textInput("keyword_input", "🔤 搜索关键词", placeholder = "例如：餐厅、酒店、学校、商场..."),
+      
+      pickerInput("poi_type", "📂 POI分类", choices = list("餐饮服务" = c("中餐厅", "外国餐厅", "快餐厅", "咖啡厅", "茶艺馆"), "购物服务" = c("商场", "超市", "便利店", "家居建材", "家电电子"), "生活服务" = c("银行", "邮局", "电信营业厅", "加油站", "医院"), "住宿服务" = c("宾馆酒店", "旅馆招待所"), "风景名胜" = c("公园", "广场", "风景名胜"), "交通设施" = c("机场", "火车站", "地铁站", "公交站")), multiple = TRUE, options = list(`actions-box` = TRUE, `live-search` = TRUE, `selected-text-format` = "count > 3")),
+      
+      sliderInput("search_radius", "📏 搜索半径(米)", min = 500, max = 10000, value = 2000, step = 500),
+      
+      radioGroupButtons("coord_system", "🌐 坐标系", choices = c("WGS84" = "wgs84", "GCJ02" = "gcj02"), selected = "wgs84", status = "primary", size = "sm"),
+      
+      pickerInput("basemap_select", "🗺️ 选择底图", choices = c("高德街道图" = "gaode_normal", "高德影像图" = "gaode_satellite", "高德深蓝海图" = "gaode_dark", "星图地球影像" = "xingtu_satellite", "星图地球矢量" = "xingtu_vector"), selected = "gaode_normal", multiple = FALSE),
+      
+      checkboxInput("show_labels", "🏷️ 显示POI名称标注", value = TRUE),
+      checkboxInput("show_popups", "ℹ️ 启用点击弹窗", value = TRUE),
+      
+      actionButton("search_btn", "🚀 开始搜索", class = "btn-primary custom-btn", icon = icon("search")),
+      actionButton("reset_btn", "🔄 重置条件", class = "btn-warning custom-btn", icon = icon("refresh")),
+      
+      hr(),
+      
+      h4("📊 搜索统计", style = "color: #2c3e50;"),
+      uiOutput("stats_display"),
+      
+      withSpinner(plotlyOutput("category_plot", height = "300px"), type = 4, color = "#0dc5c1")
+    ),
+    
+    mainPanel(
+      width = 9,
+      tabsetPanel(
+        type = "tabs",
+        id = "main_tabs",
+        
+        tabPanel("🗺️ 地图视图", br(),
+                 fluidRow(
+                   column(8, div(class = "map-container", withSpinner(leafletOutput("main_map", height = "600px"), type = 4, color = "#0dc5c1"), div(class = "coordinate-info", textOutput("mouse_coordinates")))),
+                   column(4, h4("📍 POI列表"), withSpinner(DTOutput("poi_table"), type = 4, color = "#0dc5c1"))
+                 )
+        ),
+        
+        tabPanel("📈 数据分析", br(),
+                 fluidRow(
+                   column(6, h4("📋 POI分类统计"), withSpinner(plotlyOutput("type_bar_chart", height = "400px"), type = 4, color = "#0dc5c1")),
+                   column(6, h4("🗺️ 空间分布热力图"), div(class = "map-container", withSpinner(leafletOutput("heat_map", height = "400px"), type = 4, color = "#0dc5c1")))
+                 ),
+                 fluidRow(column(12, h4("📊 详细统计信息"), withSpinner(DTOutput("stats_table"), type = 4, color = "#0dc5c1")))
+        ),
+        
+        tabPanel("💾 数据导出", br(),
+                 fluidRow(
+                   column(4, h4("📤 导出选项"), wellPanel(
+                     selectInput("export_format", "选择导出格式:", choices = c("CSV格式" = "csv", "GPKG格式" = "gpkg", "Shapefile格式" = "shp"), selected = "csv"),
+                     textInput("export_filename", "文件名:", value = paste0("poi_", format(Sys.Date(), "%Y%m%d"))),
+                     
+                     div(class = "path-input-group", h5("选择保存位置:"),
+                         div(class = "directory-input", textInput("export_path", NULL, value = getwd(), placeholder = "例如: C:/Users/YourName/Documents")),
+                         div(class = "path-example", "支持绝对路径（如C:/Users/YourName/Documents）或相对路径（如./exports）。"),
+                         
+                         br(),
+                         actionButton("export_btn", "📥 导出数据", class = "btn-success", icon = icon("download")),
+                         
+                         hr(),
+                         h5("导出统计:"),
+                         verbatimTextOutput("export_stats"),
+                         uiOutput("export_progress"),
+                         
+                         conditionalPanel(condition = "input.export_btn > 0", hr(), h5("导出状态:"), verbatimTextOutput("export_status"))
+                     )
+                   )),
+                   column(8, h4("👀 数据预览"), withSpinner(DTOutput("export_preview"), type = 4, color = "#0dc5c1"))
+                 )
+        )
+      )
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  reactive_data <- reactiveValues(
+    poi_data = NULL,
+    current_location = c(116.4, 39.9),
+    map_bounds = NULL,
+    mouse_coords = c(0, 0),
+    search_address = "",
+    export_status = "idle",
+    last_export_path = NULL
+  )
+  
+  output$api_key_warning <- renderUI({
+    if (is.null(input$amap_api_key) || nchar(trimws(input$amap_api_key)) == 0) {
+      div(class = "api-key-warning", "⚠️ 请填写您的高德API密钥以确保搜索功能正常")
+    }
+  })
+  
+  call_amap_api <- function(endpoint, params, api_key = NULL) {
+    base_url <- "https://restapi.amap.com/v3"
+    
+    if (is.null(api_key) || nchar(trimws(api_key)) == 0) {
+      showNotification("❌ 请先填写高德API密钥", type = "error")
+      return(NULL)
+    }
+    
+    params$key <- api_key
+    params$output <- "JSON"
+    
+    tryCatch({
+      response <- GET(paste0(base_url, endpoint), query = params, timeout(30))
+      
+      if (http_status(response)$category != "Success") {
+        showNotification("网络请求失败，请检查网络连接", type = "error")
+        return(NULL)
+      }
+      
+      content <- content(response, "text", encoding = "UTF-8")
+      result <- fromJSON(content, flatten = TRUE)
+      
+      if (result$status == "1") {
+        return(result)
+      } else {
+        showNotification(paste("API错误:", result$info), type = "error")
+        return(NULL)
+      }
+    }, error = function(e) {
+      showNotification(paste("API调用失败:", e$message), type = "error")
+      return(NULL)
+    })
+  }
+  
+  get_address_coordinates <- function(address, api_key = NULL) {
+    if (is.null(address) || nchar(trimws(address)) == 0) {
+      return(c(116.4, 39.9))
+    }
+    
+    result <- call_amap_api("/geocode/geo", list(address = address), api_key)
+    
+    if (!is.null(result) && length(result$geocodes) > 0) {
+      location <- result$geocodes$location[1]
+      coords <- as.numeric(strsplit(location, ",")[[1]])
+      return(coords)
+    }
+    return(c(116.4, 39.9))
+  }
+  
+  get_all_poi_data <- function(center_coords, keyword, types, radius, api_key = NULL) {
+    all_pois <- list()
+    page <- 1
+    max_pages <- 10
+    
+    while (page <= max_pages) {
+      search_params <- list(
+        keywords = keyword,
+        types = ifelse(length(types) > 0, paste(types, collapse = "|"), ""),
+        location = paste(center_coords, collapse = ","),
+        radius = radius,
+        offset = 50,
+        page = page,
+        extensions = "base"
+      )
+      
+      poi_result <- call_amap_api("/place/around", search_params, api_key)
+      
+      if (is.null(poi_result) || is.null(poi_result$pois) || length(poi_result$pois) == 0) {
+        break
+      }
+      
+      all_pois[[page]] <- poi_result$pois
+      
+      total_count <- as.numeric(poi_result$count)
+      current_count <- sum(sapply(all_pois, function(x) nrow(as.data.frame(x))))
+      
+      if (current_count >= total_count || nrow(poi_result$pois) < 50) {
+        break
+      }
+      
+      page <- page + 1
+      Sys.sleep(0.2)
+    }
+    
+    if (length(all_pois) > 0) {
+      combined_pois <- do.call(rbind, lapply(all_pois, as.data.frame))
+      combined_pois <- combined_pois[!duplicated(combined_pois$id), ]
+      return(combined_pois)
+    } else {
+      return(data.frame())
+    }
+  }
+  
+  get_basemap_config <- function(basemap_type) {
+    xingtu_token <- "0387617489127d413c79cc1c3cd8104574224877f3c1842a8b4555b13a5ba988"
+    
+    configs <- list(
+      "gaode_normal" = list(url = "https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}", attribution = '&copy; <a href="https://ditu.amap.com/">高德地图</a>', subdomains = "1234"),
+      "gaode_satellite" = list(url = "https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}", attribution = '&copy; <a href="https://ditu.amap.com/">高德地图</a>', subdomains = "1234"),
+      "gaode_dark" = list(url = "https://webst0{s}.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}", attribution = '&copy; <a href="https://ditu.amap.com/">高德地图</a>', subdomains = "1234"),
+      "xingtu_satellite" = list(url = paste0("https://tiles.geovisearth.com/base/v1/img/{z}/{x}/{y}?token=", xingtu_token), attribution = "&copy; 星图地球数据云", subdomains = "abc"),
+      "xingtu_vector" = list(url = paste0("https://tiles.geovisearth.com/base/v1/vec/{z}/{x}/{y}?token=", xingtu_token), attribution = "&copy; 星图地球数据云", subdomains = "abc")
+    )
+    
+    return(configs[[basemap_type]] %||% configs[["gaode_normal"]])
+  }
+  
+  gcj02_to_wgs84 <- function(lng, lat) {
+    a <- 6378245.0
+    ee <- 0.006693421622965943
+    
+    if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) {
+      return(list(lon = lng, lat = lat))
+    }
+    
+    dlat <- transform_lat(lng - 105.0, lat - 35.0)
+    dlng <- transform_lng(lng - 105.0, lat - 35.0)
+    
+    radlat <- lat / 180.0 * pi
+    magic <- sin(radlat)
+    magic <- 1 - ee * magic * magic
+    sqrtmagic <- sqrt(magic)
+    
+    dlat <- (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * pi)
+    dlng <- (dlng * 180.0) / (a / sqrtmagic * cos(radlat) * pi)
+    
+    wgs_lat <- lat - dlat
+    wgs_lng <- lng - dlng
+    
+    return(list(lon = wgs_lng, lat = wgs_lat))
+  }
+  
+  transform_lat <- function(x, y) {
+    ret <- -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * sqrt(abs(x))
+    ret <- ret + (20.0 * sin(6.0 * x * pi) + 20.0 * sin(2.0 * x * pi)) * 2.0 / 3.0
+    ret <- ret + (20.0 * sin(y * pi) + 40.0 * sin(y / 3.0 * pi)) * 2.0 / 3.0
+    ret <- ret + (160.0 * sin(y / 12.0 * pi) + 320 * sin(y * pi / 30.0)) * 2.0 / 3.0
+    return(ret)
+  }
+  
+  transform_lng <- function(x, y) {
+    ret <- 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
+    ret <- ret + (20.0 * sin(6.0 * x * pi) + 20.0 * sin(2.0 * x * pi)) * 2.0 / 3.0
+    ret <- ret + (20.0 * sin(x * pi) + 40.0 * sin(x / 3.0 * pi)) * 2.0 / 3.0
+    ret <- ret + (150.0 * sin(x / 12.0 * pi) + 300.0 * sin(x / 30.0 * pi)) * 2.0 / 3.0
+    return(ret)
+  }
+  
+  observeEvent(input$search_btn, {
+    req(input$address_input, input$keyword_input)
+    
+    user_api_key <- input$amap_api_key
+    
+    if (is.null(user_api_key) || nchar(trimws(user_api_key)) == 0) {
+      showNotification("❌ 请先填写高德API密钥", type = "error")
+      return()
+    }
+    
+    if (nchar(trimws(input$address_input)) == 0) {
+      showNotification("❌ 请输入精确地址", type = "warning")
+      return()
+    }
+    
+    if (nchar(trimws(input$keyword_input)) == 0) {
+      showNotification("❌ 请输入搜索关键词", type = "warning")
+      return()
+    }
+    
+    showNotification("正在获取地址坐标...", type = "message", duration = NULL, id = "loading")
+    
+    address_coords <- get_address_coordinates(input$address_input, user_api_key)
+    reactive_data$current_location <- address_coords
+    reactive_data$search_address <- input$address_input
+    
+    showNotification("正在搜索POI数据...", type = "message", duration = NULL, id = "loading")
+    
+    all_poi_data <- get_all_poi_data(
+      address_coords, 
+      input$keyword_input, 
+      input$poi_type, 
+      input$search_radius,
+      user_api_key
+    )
+    
+    removeNotification("loading")
+    
+    if (!is.null(all_poi_data) && nrow(all_poi_data) > 0) {
+      processed_poi <- process_poi_data(all_poi_data)
+      reactive_data$poi_data <- processed_poi
+      
+      showNotification(paste("✅ 成功找到", nrow(processed_poi), "个POI"), type = "message", duration = 3)
+    } else {
+      showNotification("❌ 没有找到符合条件的POI，请调整搜索条件", type = "warning", duration = 3)
+    }
+  })
+  
+  process_poi_data <- function(poi_df) {
+    if (is.null(poi_df) || nrow(poi_df) == 0) return(data.frame())
+    
+    if ("location" %in% names(poi_df)) {
+      coords <- strsplit(poi_df$location, ",")
+      poi_df$lon_gcj02 <- as.numeric(sapply(coords, `[`, 1))
+      poi_df$lat_gcj02 <- as.numeric(sapply(coords, `[`, 2))
+    } else if ("lon_gcj02" %in% names(poi_df) && "lat_gcj02" %in% names(poi_df)) {
+    } else {
+      return(data.frame())
+    }
+    
+    if (input$coord_system == "wgs84") {
+      converted_coords <- mapply(gcj02_to_wgs84, poi_df$lon_gcj02, poi_df$lat_gcj02)
+      poi_df$lon <- as.numeric(converted_coords["lon", ])
+      poi_df$lat <- as.numeric(converted_coords["lat", ])
+    } else {
+      poi_df$lon <- poi_df$lon_gcj02
+      poi_df$lat <- poi_df$lat_gcj02
+    }
+    
+    valid_coords <- !is.na(poi_df$lon) & !is.na(poi_df$lat) & poi_df$lon >= 70 & poi_df$lon <= 140 & poi_df$lat >= 0 & poi_df$lat <= 55
+    poi_df <- poi_df[valid_coords, ]
+    
+    if (nrow(poi_df) == 0) return(data.frame())
+    
+    keep_cols <- c("id", "name", "type", "address", "tel", "lon", "lat", "distance", "lon_gcj02", "lat_gcj02")
+    available_cols <- keep_cols[keep_cols %in% names(poi_df)]
+    
+    result_df <- poi_df[, available_cols, drop = FALSE]
+    rownames(result_df) <- NULL
+    
+    result_df$id <- as.character(result_df$id)
+    if ("name" %in% names(result_df)) result_df$name <- gsub("<.*?>", "", as.character(result_df$name))
+    if ("type" %in% names(result_df)) result_df$type <- as.character(result_df$type)
+    if ("address" %in% names(result_df)) result_df$address <- gsub("<.*?>", "", as.character(result_df$address))
+    if ("tel" %in% names(result_df)) result_df$tel <- as.character(result_df$tel)
+    if ("distance" %in% names(result_df)) result_df$distance <- as.numeric(result_df$distance)
+    if ("lon" %in% names(result_df)) result_df$lon <- as.numeric(result_df$lon)
+    if ("lat" %in% names(result_df)) result_df$lat <- as.numeric(result_df$lat)
+    
+    result_df$icon <- get_poi_icon(result_df$type)
+    result_df$color <- get_poi_color(result_df$type)
+    
+    return(result_df)
+  }
+  
+  get_poi_icon <- function(types) {
+    icons <- sapply(types, function(type) {
+      if (grepl("餐厅|饭店|美食", type)) return("cutlery")
+      if (grepl("酒店|宾馆|住宿", type)) return("bed")
+      if (grepl("商场|超市|购物", type)) return("shopping-cart")
+      if (grepl("银行|金融", type)) return("money")
+      if (grepl("医院|医疗", type)) return("hospital")
+      if (grepl("学校|教育", type)) return("graduation-cap")
+      if (grepl("公园|景点", type)) return("tree")
+      if (grepl("地铁|公交|交通", type)) return("subway")
+      return("map-marker")
+    })
+    return(icons)
+  }
+  
+  get_poi_color <- function(types) {
+    colors <- sapply(types, function(type) {
+      if (grepl("餐厅|饭店|美食", type)) return("red")
+      if (grepl("酒店|宾馆|住宿", type)) return("blue")
+      if (grepl("商场|超市|购物", type)) return("purple")
+      if (grepl("银行|金融", type)) return("green")
+      if (grepl("医院|医疗", type)) return("pink")
+      if (grepl("学校|教育", type)) return("orange")
+      if (grepl("公园|景点", type)) return("darkgreen")
+      if (grepl("地铁|公交|交通", type)) return("darkblue")
+      return("gray")
+    })
+    return(colors)
+  }
+  
+  output$main_map <- renderLeaflet({
+    basemap_config <- get_basemap_config(input$basemap_select)
+    
+    leaflet() %>%
+      addTiles(
+        urlTemplate = basemap_config$url,
+        attribution = basemap_config$attribution,
+        options = tileOptions(
+          subdomains = basemap_config$subdomains,
+          minZoom = 3,
+          maxZoom = 18
+        )
+      ) %>%
+      addEasyButton(
+        easyButton(
+          icon = "fa-crosshairs",
+          title = "定位到搜索地址",
+          onClick = JS("function(btn, map){ map.setView([39.9, 116.4], 12); }")
+        )
+      ) %>%
+      addScaleBar(position = "bottomleft") %>%
+      htmlwidgets::onRender("
+        function(el, x) {
+          var map = this;
+          var coordInfo = document.createElement('div');
+          coordInfo.className = 'coordinate-info';
+          coordInfo.innerHTML = '移动鼠标查看坐标';
+          el.appendChild(coordInfo);
+          
+          map.on('mousemove', function(e) {
+            var coords = e.latlng;
+            var lat = coords.lat.toFixed(6);
+            var lng = coords.lng.toFixed(6);
+            coordInfo.innerHTML = '经度: ' + lng + ' 纬度: ' + lat;
+            Shiny.setInputValue('map_mouse_coords', {lat: lat, lng: lng});
+          });
+        }
+      ") %>%
+      setView(lng = 116.4, lat = 39.9, zoom = 12)
+  })
+  
+  observeEvent(input$map_mouse_coords, {
+    reactive_data$mouse_coords <- c(input$map_mouse_coords$lng, input$map_mouse_coords$lat)
+  })
+  
+  output$mouse_coordinates <- renderText({
+    if (!is.null(input$map_mouse_coords)) {
+      lat <- input$map_mouse_coords$lat
+      lng <- input$map_mouse_coords$lng
+      paste("经度:", lng, "纬度:", lat)
+    } else {
+      "移动鼠标查看坐标"
+    }
+  })
+  
+  observeEvent(input$basemap_select, {
+    basemap_config <- get_basemap_config(input$basemap_select)
+    
+    leafletProxy("main_map") %>%
+      clearTiles() %>%
+      addTiles(
+        urlTemplate = basemap_config$url,
+        attribution = basemap_config$attribution,
+        options = tileOptions(
+          subdomains = basemap_config$subdomains,
+          minZoom = 3,
+          maxZoom = 18
+        )
+      )
+  })
+  
+  observeEvent(reactive_data$poi_data, {
+    req(reactive_data$poi_data)
+    
+    poi_data <- reactive_data$poi_data
+    center_coords <- reactive_data$current_location
+    
+    if (nrow(poi_data) > 0) {
+      display_data <- poi_data
+      
+      if (input$basemap_select %in% c("gaode_normal", "gaode_satellite", "gaode_dark")) {
+        display_data$display_lon <- display_data$lon_gcj02
+        display_data$display_lat <- display_data$lat_gcj02
+      } else {
+        display_data$display_lon <- display_data$lon
+        display_data$display_lat <- display_data$lat
+      }
+      
+      icons <- awesomeIcons(
+        icon = display_data$icon,
+        iconColor = 'white',
+        library = 'fa',
+        markerColor = display_data$color
+      )
+      
+      leafletProxy("main_map") %>%
+        clearMarkers() %>%
+        clearMarkerClusters() %>%
+        clearControls() %>%
+        setView(lng = center_coords[1], lat = center_coords[2], zoom = 15)
+      
+      if (input$show_labels) {
+        leafletProxy("main_map") %>%
+          addLabelOnlyMarkers(
+            data = display_data,
+            lng = ~display_lon, lat = ~display_lat,
+            label = ~name,
+            labelOptions = labelOptions(
+              noHide = TRUE,
+              direction = "top",
+              offset = c(0, -40),
+              textOnly = FALSE,
+              style = list(
+                "padding" = "6px 10px",
+                "border-radius" = "4px",
+                "background-color" = "rgba(255, 255, 255, 0.95)",
+                "color" = "#333",
+                "border" = "1px solid #667eea",
+                "box-shadow" = "0 2px 6px rgba(0,0,0,0.15)",
+                "font-size" = "12px",
+                "font-weight" = "bold",
+                "font-family" = "Arial, sans-serif",
+                "max-width" = "200px",
+                "white-space" = "nowrap",
+                "text-align" = "center",
+                "z-index" = "999"
+              ),
+              className = "poi-label"
+            )
+          )
+      }
+      
+      popup_content <- if (input$show_popups) {
+        ~paste0(
+          "<div style='min-width: 250px;'>",
+          "<h4 style='margin:0; color: #2c3e50; border-bottom: 2px solid #667eea; padding-bottom: 5px;'>", name, "</h4>",
+          "<div style='margin-top: 10px;'>",
+          "<p style='margin: 5px 0;'><strong>📍 类型:</strong> ", type, "</p>",
+          "<p style='margin: 5px 0;'><strong>🏠 地址:</strong> ", address, "</p>",
+          ifelse(!is.na(tel) & tel != "", paste0("<p style='margin: 5px 0;'><strong>📞 电话:</strong> ", tel, "</p>"), ""),
+          ifelse("distance" %in% names(display_data) & !is.na(distance), paste0("<p style='margin: 5px 0;'><strong>📏 距离:</strong> ", distance, "米</p>"), ""),
+          "<p style='margin: 5px 0; font-size: 12px; color: #666;'><strong>坐标系:</strong> ", ifelse(input$coord_system == "wgs84", "WGS84", "GCJ02"), "</p>",
+          "</div>",
+          "</div>"
+        )
+      } else {
+        NULL
+      }
+      
+      leafletProxy("main_map") %>%
+        addAwesomeMarkers(
+          data = display_data,
+          lng = ~display_lon, lat = ~display_lat,
+          icon = icons,
+          popup = popup_content,
+          clusterOptions = markerClusterOptions(
+            iconCreateFunction = JS("
+              function(cluster) {
+                return new L.DivIcon({
+                  html: '<div style=\"background-color: rgba(255, 107, 107, 0.6); border-radius: 50%; color: white; font-weight: bold;\">' + cluster.getChildCount() + '</div>',
+                  className = 'poi-marker-cluster',
+                  iconSize: new L.Point(40, 40)
+                });
+              }
+            ")
+          )
+        ) %>%
+        addLegend(
+          position = "bottomright",
+          colors = c("red", "blue", "purple", "green", "pink", "orange", "darkgreen", "darkblue"),
+          labels = c("餐饮", "住宿", "购物", "金融", "医疗", "教育", "景点", "交通"),
+          title = "POI类型图例",
+          opacity = 0.8
+        ) %>%
+        addMarkers(
+          lng = center_coords[1], lat = center_coords[2],
+          icon = makeAwesomeIcon(
+            icon = 'star',
+            markerColor = 'red',
+            iconColor = 'white',
+            library = 'fa'
+          ),
+          popup = paste0("<strong>搜索中心点</strong><br>", reactive_data$search_address),
+          label = "搜索中心点",
+          labelOptions = labelOptions(
+            noHide = TRUE,
+            direction = "top",
+            offset = c(0, -35),
+            style = list(
+              "background" = "rgba(255, 0, 0, 0.9)",
+              "color" = "white",
+              "padding" = "8px 12px",
+              "border-radius" = "6px",
+              "font-size" = "13px",
+              "font-weight" = "bold",
+              "border" = "2px solid white",
+              "box-shadow" = "0 3px 10px rgba(0,0,0,0.3)"
+            )
+          )
+        )
+    }
+  })
+  
+  observeEvent(input$show_labels, {
+    if (!is.null(reactive_data$poi_data) && nrow(reactive_data$poi_data) > 0) {
+      leafletProxy("main_map") %>%
+        clearMarkers()
+      
+      poi_data <- reactive_data$poi_data
+      center_coords <- reactive_data$current_location
+      
+      if (input$basemap_select %in% c("gaode_normal", "gaode_satellite", "gaode_dark")) {
+        display_data <- poi_data
+        display_data$display_lon <- display_data$lon_gcj02
+        display_data$display_lat <- display_data$lat_gcj02
+      } else {
+        display_data <- poi_data
+        display_data$display_lon <- display_data$lon
+        display_data$display_lat <- display_data$lat
+      }
+      
+      icons <- awesomeIcons(
+        icon = display_data$icon,
+        iconColor = 'white',
+        library = 'fa',
+        markerColor = display_data$color
+      )
+      
+      if (input$show_labels) {
+        leafletProxy("main_map") %>%
+          addLabelOnlyMarkers(
+            data = display_data,
+            lng = ~display_lon, lat = ~display_lat,
+            label = ~name,
+            labelOptions = labelOptions(
+              noHide = TRUE,
+              direction = "top",
+              offset = c(0, -40),
+              textOnly = FALSE,
+              style = list(
+                "padding" = "6px 10px",
+                "border-radius" = "4px",
+                "background-color" = "rgba(255, 255, 255, 0.95)",
+                "color" = "#333",
+                "border" = "1px solid #667eea",
+                "box-shadow" = "0 2px 6px rgba(0,0,0,0.15)",
+                "font-size" = "12px",
+                "font-weight" = "bold",
+                "font-family" = "Arial, sans-serif",
+                "max-width" = "200px",
+                "white-space" = "nowrap",
+                "text-align" = "center",
+                "z-index" = "999"
+              ),
+              className = "poi-label"
+            )
+          )
+      }
+      
+      popup_content <- if (input$show_popups) {
+        ~paste0(
+          "<div style='min-width: 250px;'>",
+          "<h4 style='margin:0; color: #2c3e50; border-bottom: 2px solid #667eea; padding-bottom: 5px;'>", name, "</h4>",
+          "<div style='margin-top: 10px;'>",
+          "<p style='margin: 5px 0;'><strong>📍 类型:</strong> ", type, "</p>",
+          "<p style='margin: 5px 0;'><strong>🏠 地址:</strong> ", address, "</p>",
+          ifelse(!is.na(tel) & tel != "", paste0("<p style='margin: 5px 0;'><strong>📞 电话:</strong> ", tel, "</p>"), ""),
+          ifelse("distance" %in% names(display_data) & !is.na(distance), paste0("<p style='margin: 5px 0;'><strong>📏 距离:</strong> ", distance, "米</p>"), ""),
+          "<p style='margin: 5px 0; font-size: 12px; color: #666;'><strong>坐标系:</strong> ", ifelse(input$coord_system == "wgs84", "WGS84", "GCJ02"), "</p>",
+          "</div>",
+          "</div>"
+        )
+      } else {
+        NULL
+      }
+      
+      leafletProxy("main_map") %>%
+        addAwesomeMarkers(
+          data = display_data,
+          lng = ~display_lon, lat = ~display_lat,
+          icon = icons,
+          popup = popup_content,
+          clusterOptions = markerClusterOptions(
+            iconCreateFunction = JS("
+              function(cluster) {
+                return new L.DivIcon({
+                  html: '<div style=\"background-color: rgba(255, 107, 107, 0.6); border-radius: 50%; color: white; font-weight: bold;\">' + cluster.getChildCount() + '</div>',
+                  className = 'poi-marker-cluster',
+                  iconSize: new L.Point(40, 40)
+                });
+              }
+            ")
+          )
+        ) %>%
+        addMarkers(
+          lng = center_coords[1], lat = center_coords[2],
+          icon = makeAwesomeIcon(
+            icon = 'star',
+            markerColor = 'red',
+            iconColor = 'white',
+            library = 'fa'
+          ),
+          popup = paste0("<strong>搜索中心点</strong><br>", reactive_data$search_address),
+          label = "搜索中心点",
+          labelOptions = labelOptions(
+            noHide = TRUE,
+            direction = "top",
+            offset = c(0, -35),
+            style = list(
+              "background" = "rgba(255, 0, 0, 0.9)",
+              "color" = "white",
+              "padding" = "8px 12px",
+              "border-radius" = "6px",
+              "font-size" = "13px",
+              "font-weight" = "bold",
+              "border" = "2px solid white",
+              "box-shadow" = "0 3px 10px rgba(0,0,0,0.3)"
+            )
+          )
+        )
+    }
+  })
+  
+  output$heat_map <- renderLeaflet({
+    req(reactive_data$poi_data)
+    
+    poi_data <- reactive_data$poi_data
+    center_coords <- reactive_data$current_location
+    
+    if (input$basemap_select %in% c("gaode_normal", "gaode_satellite", "gaode_dark")) {
+      heat_lon <- poi_data$lon_gcj02
+      heat_lat <- poi_data$lat_gcj02
+    } else {
+      heat_lon <- poi_data$lon
+      heat_lat <- poi_data$lat
+    }
+    
+    basemap_config <- get_basemap_config(input$basemap_select)
+    
+    leaflet() %>%
+      addTiles(
+        urlTemplate = basemap_config$url,
+        attribution = basemap_config$attribution,
+        options = tileOptions(
+          subdomains = basemap_config$subdomains
+        )
+      ) %>%
+      setView(lng = center_coords[1], lat = center_coords[2], zoom = 15) %>%
+      addHeatmap(
+        data = data.frame(lon = heat_lon, lat = heat_lat),
+        lng = ~lon, lat = ~lat,
+        intensity = 1,
+        radius = 15,
+        blur = 10,
+        max = 0.5,
+        gradient = c("blue", "cyan", "#00FF00", "yellow", "red")
+      )
+  })
+  
+  output$poi_table <- renderDT({
+    req(reactive_data$poi_data)
+    
+    display_data <- reactive_data$poi_data
+    remove_cols <- c("icon", "color", "lon_gcj02", "lat_gcj02")
+    display_data <- display_data[, !names(display_data) %in% remove_cols]
+    
+    datatable(
+      display_data,
+      options = list(
+        pageLength = 10,
+        scrollX = TRUE,
+        dom = 'tip',
+        language = list(
+          search = "搜索:",
+          lengthMenu = "显示 _MENU_ 条记录",
+          info = "显示第 _START_ 到 _END_ 条记录，共 _TOTAL_ 条",
+          paginate = list(previous = "上一页", `next` = "下一页")
+        )
+      ),
+      rownames = FALSE,
+      selection = 'single'
+    ) %>% 
+      formatStyle(columns = colnames(display_data), fontSize = '12px')
+  })
+  
+  output$stats_display <- renderUI({
+    req(reactive_data$poi_data)
+    
+    poi_data <- reactive_data$poi_data
+    total_count <- nrow(poi_data)
+    
+    if (total_count > 0) {
+      type_counts <- table(poi_data$type)
+      top_type <- names(which.max(type_counts))
+      top_count <- max(type_counts)
+      
+      lon_range <- range(poi_data$lon, na.rm = TRUE)
+      lat_range <- range(poi_data$lat, na.rm = TRUE)
+      
+      tagList(
+        div(class = "stats-card",
+            h5("📈 基本统计"),
+            p(paste("总POI数量:", total_count)),
+            p(paste("分类数量:", length(type_counts))),
+            p(paste("主要类型:", top_type, "(", top_count, "个)")),
+            p(paste("坐标系:", ifelse(input$coord_system == "wgs84", "WGS84", "GCJ02")))
+        ),
+        div(class = "stats-card",
+            h5("🗺️ 坐标范围"),
+            p(paste("经度:", round(lon_range[1], 4), "-", round(lon_range[2], 4))),
+            p(paste("纬度:", round(lat_range[1], 4), "-", round(lat_range[2], 4)))
+        )
+      )
+    } else {
+      div(class = "stats-card",
+          h5("📈 基本统计"),
+          p("暂无数据，请先搜索POI")
+      )
+    }
+  })
+  
+  output$category_plot <- renderPlotly({
+    req(reactive_data$poi_data)
+    
+    poi_data <- reactive_data$poi_data
+    type_counts <- as.data.frame(table(poi_data$type))
+    colnames(type_counts) <- c("category", "count")
+    
+    if (nrow(type_counts) > 0) {
+      plot_ly(type_counts, labels = ~category, values = ~count, type = 'pie',
+              textinfo = 'label+percent',
+              insidetextorientation = 'radial',
+              marker = list(colors = c('#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F'))) %>%
+        layout(showlegend = TRUE,
+               margin = list(l = 20, r = 20, t = 20, b = 20),
+               legend = list(orientation = "v", x = 1.05, y = 0.5))
+    }
+  })
+  
+  output$type_bar_chart <- renderPlotly({
+    req(reactive_data$poi_data)
+    
+    poi_data <- reactive_data$poi_data
+    type_counts <- as.data.frame(table(poi_data$type))
+    colnames(type_counts) <- c("category", "count")
+    
+    if (nrow(type_counts) > 0) {
+      type_counts <- type_counts[order(-type_counts$count), ]
+      
+      plot_ly(type_counts, x = ~count, y = ~reorder(category, count), 
+              type = 'bar', orientation = 'h',
+              marker = list(color = '#4ECDC4')) %>%
+        layout(title = "POI分类数量统计",
+               xaxis = list(title = "数量"),
+               yaxis = list(title = ""),
+               margin = list(l = 150))
+    }
+  })
+  
+  output$stats_table <- renderDT({
+    req(reactive_data$poi_data)
+    
+    poi_data <- reactive_data$poi_data
+    type_stats <- as.data.frame(table(poi_data$type))
+    colnames(type_stats) <- c("POI类型", "数量")
+    type_stats$占比 <- paste0(round(type_stats$数量 / nrow(poi_data) * 100, 1), "%")
+    
+    datatable(
+      type_stats,
+      options = list(
+        pageLength = 10,
+        dom = 'tip'
+      ),
+      rownames = FALSE
+    )
+  })
+  
+  output$export_preview <- renderDT({
+    req(reactive_data$poi_data)
+    
+    preview_data <- reactive_data$poi_data
+    remove_cols <- c("icon", "color")
+    preview_data <- preview_data[, !names(preview_data) %in% remove_cols]
+    
+    datatable(
+      preview_data,
+      options = list(
+        pageLength = 5,
+        scrollX = TRUE
+      ),
+      rownames = FALSE
+    )
+  })
+  
+  output$export_stats <- renderText({
+    req(reactive_data$poi_data)
+    
+    poi_data <- reactive_data$poi_data
+    paste(
+      "总记录数:", nrow(poi_data), "\n",
+      "数据类型:", length(unique(poi_data$type)), "种\n",
+      "数据范围:", 
+      round(min(poi_data$lon, na.rm = TRUE), 4), "-", 
+      round(max(poi_data$lon, na.rm = TRUE), 4), "(经度)\n",
+      round(min(poi_data$lat, na.rm = TRUE), 4), "-", 
+      round(max(poi_data$lat, na.rm = TRUE), 4), "(纬度)"
+    )
+  })
+  
+  output$export_progress <- renderUI({
+    if (reactive_data$export_status == "processing") {
+      div(class = "export-progress",
+          tags$div(class = "progress",
+                   tags$div(class = "progress-bar progress-bar-striped progress-bar-animated",
+                            style = "width: 100%",
+                            "正在导出数据...")
+          )
+      )
+    }
+  })
+  
+  output$export_status <- renderText({
+    if (!is.null(reactive_data$last_export_path)) {
+      paste("最后导出位置:", reactive_data$last_export_path)
+    } else {
+      "尚未导出数据"
+    }
+  })
+  
+  observeEvent(input$reset_btn, {
+    updateTextInput(session, "address_input", value = "")
+    updateTextInput(session, "keyword_input", value = "")
+    updatePickerInput(session, "poi_type", selected = character(0))
+    updateSliderInput(session, "search_radius", value = 2000)
+    updatePickerInput(session, "basemap_select", selected = "gaode_normal")
+    updateRadioGroupButtons(session, "coord_system", selected = "wgs84")
+    updateCheckboxInput(session, "show_labels", value = TRUE)
+    updateCheckboxInput(session, "show_popups", value = TRUE)
+    reactive_data$poi_data <- NULL
+    reactive_data$search_address <- ""
+    
+    leafletProxy("main_map") %>%
+      clearMarkers() %>%
+      clearMarkerClusters() %>%
+      clearControls() %>%
+      setView(lng = 116.4, lat = 39.9, zoom = 12)
+    
+    showNotification("🔄 搜索条件已重置", type = "message")
+  })
+  
+  observeEvent(input$export_btn, {
+    req(reactive_data$poi_data)
+    
+    filename <- input$export_filename
+    format <- input$export_format
+    export_path <- input$export_path
+    
+    if (is.null(filename) || nchar(trimws(filename)) == 0) {
+      showNotification("❌ 请输入文件名", type = "error")
+      return()
+    }
+    
+    safe_filename <- gsub("[^a-zA-Z0-9_\\-]", "_", filename)
+    safe_filename <- substr(safe_filename, 1, 8) # 限制Shapefile主文件名长度
+    
+    reactive_data$export_status <- "processing"
+    
+    tryCatch({
+      export_data <- reactive_data$poi_data
+      remove_cols <- c("icon", "color", "lon_gcj02", "lat_gcj02")
+      export_data <- export_data[, !names(export_data) %in% remove_cols]
+      
+      colnames(export_data) <- c("ID", "NAME", "TYPE", "ADDR", "TEL", "LON", "LAT", "DIST")
+      
+      export_data$ID <- as.character(export_data$ID)
+      export_data$NAME <- as.character(export_data$NAME)
+      export_data$TYPE <- as.character(export_data$TYPE)
+      export_data$ADDR <- as.character(export_data$ADDR)
+      export_data$TEL <- as.character(export_data$TEL)
+      export_data$LON <- round(as.numeric(export_data$LON), 6)
+      export_data$LAT <- round(as.numeric(export_data$LAT), 6)
+      if ("DIST" %in% colnames(export_data)) {
+        export_data$DIST <- as.numeric(export_data$DIST)
+      }
+      
+      if (nchar(trimws(export_path)) > 0) {
+        if (!dir.exists(export_path)) {
+          dir.create(export_path, recursive = TRUE, showWarnings = FALSE)
+        }
+        base_path <- file.path(export_path, safe_filename)
+      } else {
+        default_export_dir <- file.path(getwd(), "poi_exports")
+        if (!dir.exists(default_export_dir)) {
+          dir.create(default_export_dir, recursive = TRUE, showWarnings = FALSE)
+        }
+        base_path <- file.path(default_export_dir, safe_filename)
+      }
+      
+      if (format == "csv") {
+        file_path <- paste0(base_path, ".csv")
+        
+        # 修复CSV编码问题 - 使用UTF-8-BOM编码，确保Excel正确显示中文
+        con <- file(file_path, "w", encoding = "UTF-8")
+        writeLines("\uFEFF", con, useBytes = TRUE)
+        write.csv(export_data, con, row.names = FALSE, na = "", fileEncoding = "UTF-8")
+        close(con)
+        
+        msg <- paste("✅ CSV数据已成功导出到:", file_path)
+        
+      } else if (format == "gpkg") {
+        file_path <- paste0(base_path, ".gpkg")
+        crs_code <- ifelse(input$coord_system == "wgs84", 4326, 4490)
+        
+        poi_sf <- st_as_sf(export_data, coords = c("LON", "LAT"), crs = crs_code, remove = FALSE)
+        st_write(poi_sf, file_path, layer = "poi_data", delete_dsn = TRUE, quiet = TRUE)
+        msg <- paste("✅ GPKG数据已成功导出到:", file_path)
+        
+      } else if (format == "shp") {
+        shp_dir <- paste0(base_path, "_shp")
+        
+        if (dir.exists(shp_dir)) {
+          unlink(shp_dir, recursive = TRUE, force = TRUE)
+        }
+        dir.create(shp_dir, recursive = TRUE, showWarnings = FALSE)
+        
+        crs_code <- ifelse(input$coord_system == "wgs84", 4326, 4490)
+        
+        shp_colnames <- colnames(export_data)
+        shp_colnames <- substr(shp_colnames, 1, 10)
+        colnames(export_data) <- shp_colnames
+        
+        poi_sf <- st_as_sf(export_data, coords = c("LON", "LAT"), crs = crs_code, remove = FALSE)
+        
+        shp_file_path <- file.path(shp_dir, paste0(safe_filename, ".shp"))
+        st_write(
+          obj = poi_sf,
+          dsn = shp_file_path,
+          layer = safe_filename,
+          driver = "ESRI Shapefile",
+          encoding = "UTF-8",
+          delete_layer = TRUE,
+          quiet = TRUE
+        )
+        msg <- paste("✅ Shapefile数据已成功导出到:", shp_dir)
+        file_path <- shp_dir
+      }
+      
+      reactive_data$export_status <- "completed"
+      reactive_data$last_export_path <- normalizePath(dirname(file_path))
+      showNotification(msg, type = "message", duration = 5)
+      
+    }, error = function(e) {
+      reactive_data$export_status <- "failed"
+      showNotification(paste("❌ 导出失败:", e$message), type = "error", duration = 5)
+    })
+  })
+}
+
+shinyApp(ui = ui, server = server)
+
+
+高德地图 POI 搜索与可视化分析系统
+
+
+
+
+
+
+
+
+
